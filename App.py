@@ -1,5 +1,5 @@
-from flask import Flask, request, render_template_string, send_from_directory
-import os
+from flask import Flask, request, render_template_string, send_from_directory, send_file
+import os, zipfile, io
 
 app = Flask(__name__)
 
@@ -77,13 +77,13 @@ HTML_PAGE = """
         </div>
 
         <div class="card">
-            <h2>📂 Upload Folder</h2>
-            <form method="POST" enctype="multipart/form-data" action="/upload_folder">
+            <h2>📂 Upload Folder (as .zip)</h2>
+            <form method="POST" enctype="multipart/form-data" action="/upload_zip">
                 <label class="custom-file">
-                    <input type="file" name="folder" webkitdirectory directory multiple>
-                    📁 Choose Folder
+                    <input type="file" name="zipfile" accept=".zip">
+                    📁 Choose Zip
                 </label><br>
-                <button type="submit">Upload Folder</button>
+                <button type="submit">Upload & Extract</button>
             </form>
         </div>
 
@@ -94,6 +94,9 @@ HTML_PAGE = """
                     <li><a href="/download/{{ file }}">{{ file }}</a></li>
                 {% endfor %}
             </ul>
+            <form method="GET" action="/download_all">
+                <button type="submit">⬇ Download All as Zip</button>
+            </form>
         </div>
     </div>
 </body>
@@ -149,22 +152,39 @@ def upload_files():
             saved_files.append(file.filename)
     return render_template_string(SUCCESS_PAGE, message=f"{len(saved_files)} files saved to Desktop/uploads")
 
-@app.route('/upload_folder', methods=['POST'])
-def upload_folder():
-    uploaded_files = request.files.getlist("folder")
-    saved_files = []
-    for file in uploaded_files:
-        if file.filename:
-            # Keep folder structure inside Desktop/uploads
-            folder_path = os.path.join(UPLOAD_FOLDER, file.filename)
-            os.makedirs(os.path.dirname(folder_path), exist_ok=True)
-            file.save(folder_path)
-            saved_files.append(file.filename)
-    return render_template_string(SUCCESS_PAGE, message=f"Folder uploaded with {len(saved_files)} files")
+@app.route('/upload_zip', methods=['POST'])
+def upload_zip():
+    if 'zipfile' not in request.files:
+        return "No zip file uploaded"
+
+    zip_file = request.files['zipfile']
+    if zip_file.filename.endswith('.zip'):
+        zip_path = os.path.join(UPLOAD_FOLDER, zip_file.filename)
+        zip_file.save(zip_path)
+
+        # Extract the zip into Desktop/uploads
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(UPLOAD_FOLDER)
+
+        os.remove(zip_path)  # delete the zip after extraction
+        return render_template_string(SUCCESS_PAGE, message=f"Zip extracted to Desktop/uploads")
+    return "Invalid file format"
 
 @app.route('/download/<filename>')
 def download_file(filename):
     return send_from_directory(UPLOAD_FOLDER, filename, as_attachment=True)
+
+@app.route('/download_all')
+def download_all():
+    memory_file = io.BytesIO()
+    with zipfile.ZipFile(memory_file, 'w') as zf:
+        for root, dirs, files in os.walk(UPLOAD_FOLDER):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, UPLOAD_FOLDER)  # keep folder structure
+                zf.write(file_path, arcname)
+    memory_file.seek(0)
+    return send_file(memory_file, download_name="all_files.zip", as_attachment=True)
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=True)
